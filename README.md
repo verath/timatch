@@ -8,8 +8,8 @@ Run the bot via Docker, supplying it a
 [Steam web API key](https://steamcommunity.com/dev/apikey):
 
 ```
-docker build . -t vearth/owbot-bot
-docker run -d vearth/owbot-bot -discordtoken "DISCORD_BOT_TOKEN" -steamkey "STEAM_API_KEY"
+docker build . -t vearth/timatch
+docker run -d vearth/timatch -discordtoken "DISCORD_BOT_TOKEN" -steamkey "STEAM_API_KEY"
 ```
 
 Add the bot to a guild by visiting the following url, replacing CLIENT_ID with the
