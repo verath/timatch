@@ -197,14 +197,14 @@ func (bot *bot) handleLiveGamesUpdated(ctx context.Context, liveGames []LiveLeag
 		}
 		if finished {
 			bot.gamesFinished[gameID] = true
-			// Lookup match details for the finished game
+			// Attempt to lookup match details for the finished game
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			matchDetails, err := bot.steamClient.GetMatchDetails(ctx, gameID)
+			matchDetailsRes, err := bot.steamClient.GetMatchDetails(ctx, gameID)
 			if err != nil {
 				bot.logger.Debugf("Error getting match details for finished match %d: %+v", gameID, err)
 			} else {
 				finishedGameData := gameFinishedTTSDataItem{
-					MatchDetails: &matchDetails.Result,
+					MatchDetails: matchDetailsRes.Result.MatchDetails,
 					GameNumber:   bot.gameSeriesNumber[gameID],
 				}
 				newFinished = append(newFinished, finishedGameData)

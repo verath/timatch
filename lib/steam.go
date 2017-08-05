@@ -181,7 +181,14 @@ func (res *HeroesResponse) checkResult() bool {
 }
 
 type MatchDetailsResponse struct {
-	Result MatchDetails `json:"result"`
+	Result struct {
+		*MatchDetails
+		Error *string
+	} `json:"result"`
+}
+
+func (res *MatchDetailsResponse) checkResult() bool {
+	return res.Result.Error == nil && res.Result.MatchDetails != nil
 }
 
 type MatchDetails struct {
