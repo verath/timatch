@@ -82,7 +82,7 @@ func (bot *bot) Run(ctx context.Context) error {
 	}
 	defer func() {
 		if closeErr := bot.discordSession.Close(); closeErr != nil {
-			bot.logger.Error("Error closing Discord connection: %+v", closeErr)
+			bot.logger.Errorf("Error closing Discord connection: %+v", closeErr)
 		}
 	}()
 	return errors.Wrap(bot.run(ctx), "Error during run")
@@ -90,12 +90,65 @@ func (bot *bot) Run(ctx context.Context) error {
 
 func (bot *bot) run(ctx context.Context) error {
 	for {
+		bot.updateLiveGames(ctx)
+		bot.updateFinishedGames(ctx)
 		bot.fetchFinishedMatchDetails(ctx)
-		bot.fetchLiveGames(ctx)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(updateInterval):
+		}
+	}
+}
+
+func (bot *bot) updateLiveGames(ctx context.Context) {
+	liveGamesRes, err := bot.dotaClient.GetLiveLeagueGames(ctx, tiLeagueID)
+	if err != nil {
+		bot.logger.Errorf("Error getting live games: %+v", err)
+		return
+	}
+	newDrafting := make([]dota.LiveLeagueGame, 0)
+	newStarted := make([]dota.LiveLeagueGame, 0)
+	for _, game := range liveGamesRes.Result.Games {
+		bot.gameNumbers[game.MatchID] = game.GameNumber
+		if !isGameStarted(game) {
+			if _, ok := bot.matchesDrafting[game.MatchID]; !ok {
+				newDrafting = append(newDrafting, game)
+				bot.matchesDrafting[game.MatchID] = true
+			}
+		} else {
+			if _, ok := bot.matchesStarted[game.MatchID]; !ok {
+				newStarted = append(newStarted, game)
+				bot.matchesStarted[game.MatchID] = true
+			}
+		}
+	}
+	if len(newDrafting) > 0 {
+		bot.sendTemplateMessage(tmplMatchesDrafting, newDrafting, false)
+	}
+	if len(newStarted) > 0 {
+		bot.sendTemplateMessage(tmplMatchesStarted, newStarted, true)
+	}
+}
+
+func (bot *bot) updateFinishedGames(ctx context.Context) {
+	if len(bot.matchesStarted) == len(bot.matchesFinished) {
+		bot.logger.Debug("Not fetching match history, all known games already finished")
+		return
+	}
+	historyRes, err := bot.dotaClient.GetMatchHistory(ctx, tiLeagueID)
+	if err != nil {
+		bot.logger.Errorf("Error getting match history: %+v", err)
+		return
+	}
+	for _, match := range historyRes.Result.Matches {
+		_, isStarted := bot.matchesStarted[match.MatchID]
+		_, isFinished := bot.matchesFinished[match.MatchID]
+		if isStarted && !isFinished {
+			bot.logger.Debugf("Match finished %d", match.MatchID)
+			bot.matchesFinished[match.MatchID] = true
+			entry := finishedQueueEntry{MatchID: match.MatchID, AddedAt: time.Now()}
+			bot.finishedQueue = append(bot.finishedQueue, entry)
 		}
 	}
 }
@@ -109,7 +162,10 @@ func (bot *bot) fetchFinishedMatchDetails(ctx context.Context) {
 			bot.logger.Debugf("Error getting match details for %d: %+v", entry.MatchID, err)
 			// Retry entries until they have been in the queue for > 10 min
 			if time.Since(entry.AddedAt) <= 10*time.Minute {
+				bot.logger.Debugf("<= 10 minutes ago, trying %d again next time", entry.MatchID)
 				remainingQueue = append(remainingQueue, entry)
+			} else {
+				bot.logger.Errorf("Giving up on fetching match details for %d")
 			}
 			continue
 		}
@@ -134,63 +190,6 @@ func (bot *bot) fetchFinishedMatchDetails(ctx context.Context) {
 	bot.finishedQueue = remainingQueue
 	if len(finishedDetails) > 0 {
 		bot.sendTemplateMessage(tmplMatchesFinished, finishedDetails, true)
-	}
-}
-
-func (bot *bot) fetchLiveGames(ctx context.Context) {
-	gamesRes, err := bot.dotaClient.GetLiveLeagueGames(ctx, tiLeagueID)
-	if err != nil {
-		bot.logger.Debugf("Error getting live games: %+v", err)
-		return
-	}
-	bot.handleLiveGames(gamesRes.Result.Games)
-}
-
-func (bot *bot) handleLiveGames(liveGames []dota.LiveLeagueGame) {
-	var (
-		newDrafting = make([]dota.LiveLeagueGame, 0)
-		newStarted  = make([]dota.LiveLeagueGame, 0)
-	)
-	// Find finished matches (matches started that are no longer live) and
-	// add them to a queue of matches we should fetch match details for.
-	// Note that fetching details directly is unlikely to work, as the
-	// steam api takes some time to update
-	for matchID := range bot.matchesStarted {
-		if _, ok := bot.matchesFinished[matchID]; !ok {
-			finished := true
-			for _, game := range liveGames {
-				if matchID == game.MatchID {
-					finished = false
-					break
-				}
-			}
-			if finished {
-				bot.matchesFinished[matchID] = true
-				entry := finishedQueueEntry{MatchID: matchID, AddedAt: time.Now()}
-				bot.finishedQueue = append(bot.finishedQueue, entry)
-			}
-		}
-	}
-	// Find new matches, or matches that have gone from drafting -> started
-	for _, game := range liveGames {
-		bot.gameNumbers[game.MatchID] = game.GameNumber
-		if !isGameStarted(game) {
-			if _, ok := bot.matchesDrafting[game.MatchID]; !ok {
-				newDrafting = append(newDrafting, game)
-				bot.matchesDrafting[game.MatchID] = true
-			}
-		} else {
-			if _, ok := bot.matchesStarted[game.MatchID]; !ok {
-				newStarted = append(newStarted, game)
-				bot.matchesStarted[game.MatchID] = true
-			}
-		}
-	}
-	if len(newDrafting) > 0 {
-		bot.sendTemplateMessage(tmplMatchesDrafting, newDrafting, false)
-	}
-	if len(newStarted) > 0 {
-		bot.sendTemplateMessage(tmplMatchesStarted, newStarted, true)
 	}
 }
 
@@ -244,7 +243,7 @@ func (bot *bot) sendMessage(content string, tts bool) {
 			_, err = bot.discordSession.ChannelMessageSend(channelID, content)
 		}
 		if err != nil {
-			bot.logger.Debugf("Failed sending message to channel %s: %+v", channelID, err)
+			bot.logger.Errorf("Failed sending message to channel %s: %+v", channelID, err)
 		}
 	}
 }
@@ -256,7 +255,7 @@ func (bot *bot) sendTemplateMessage(tmpl *template.Template, data interface{}, t
 	var msg bytes.Buffer
 	err := tmpl.Execute(&msg, data)
 	if err != nil {
-		bot.logger.Errorf("Failed executing tmpl '%s': %+v", tmpl.Name, err)
+		bot.logger.Errorf("Failed executing template '%s': %+v", tmpl.Name, err)
 		return
 	}
 	bot.sendMessage(msg.String(), tts)

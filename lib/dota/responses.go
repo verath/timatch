@@ -63,6 +63,21 @@ func (res *HeroesResponse) checkResult() bool {
 	return res.Result.Status == 200
 }
 
+type MatchHistoryResponse struct {
+	Result struct {
+		Status  int                 `json:"status"`
+		Matches []MatchHistoryMatch `json:"matches"`
+	} `json:"result"`
+}
+
+type MatchHistoryMatch struct {
+	MatchID int64 `json:"match_id"`
+}
+
+func (res *MatchHistoryResponse) checkResult() bool {
+	return res.Result.Status == 1
+}
+
 type MatchDetailsResponse struct {
 	Result struct {
 		*MatchDetails

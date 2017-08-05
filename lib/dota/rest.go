@@ -14,6 +14,7 @@ import (
 const apiBaseURL = "http://api.steampowered.com"
 const pathGetLiveLeagueGames = "/IDOTA2Match_570/GetLiveLeagueGames/v1/"
 const pathGetHeroes = "/IEconDOTA2_570/GetHeroes/v1/"
+const pathGetMatchHistory = "/IDOTA2Match_570/GetMatchHistory/v1/"
 const pathGetMatchDetails = "/IDOTA2Match_570/GetMatchDetails/v1/"
 
 const limitRequestsPerSecond = 1.0
@@ -81,11 +82,11 @@ func (client *Client) getJSON(ctx context.Context, req *http.Request, jsonRes in
 	}
 	defer returnToken()
 
-	client.logger.Debugf("GET: %s", req.URL.String())
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return errors.Wrap(err, "Error sending request")
 	}
+	client.logger.Debugf("GET: %s - [%s]", req.URL.EscapedPath(), res.Status)
 	if res.StatusCode != 200 {
 		return errors.Errorf("Bad HTTP response status code: %d", res.StatusCode)
 	}
@@ -126,6 +127,21 @@ func (client *Client) GetLiveLeagueGames(ctx context.Context, leagueID int) (*Li
 	query.Set("league_id", strconv.Itoa(leagueID))
 	req.URL.RawQuery = query.Encode()
 	data := &LiveLeagueGamesResponse{}
+	if err := client.getJSON(ctx, req, data); err != nil {
+		return nil, errors.Wrap(err, "Error sending request")
+	}
+	return data, nil
+}
+
+func (client *Client) GetMatchHistory(ctx context.Context, leagueID int) (*MatchHistoryResponse, error) {
+	req, err := client.newRequest(ctx, pathGetMatchHistory)
+	if err != nil {
+		return nil, errors.Wrap(err, "Error creating new request")
+	}
+	query := req.URL.Query()
+	query.Set("league_id", strconv.Itoa(leagueID))
+	req.URL.RawQuery = query.Encode()
+	data := &MatchHistoryResponse{}
 	if err := client.getJSON(ctx, req, data); err != nil {
 		return nil, errors.Wrap(err, "Error sending request")
 	}
