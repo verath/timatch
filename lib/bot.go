@@ -6,71 +6,47 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/bwmarrin/discordgo"
 	"github.com/pkg/errors"
+	"github.com/verath/timatch/lib/dota"
 	"strings"
 	"sync"
 	"text/template"
 	"time"
 )
 
-// MatchUpdateInterval is the number of seconds between fetches
+// updateInterval is the number of seconds between fetches
 // of live matches
-const MatchUpdateInterval = 60 * time.Second
+const updateInterval = 60 * time.Second
 
 // The league ID of the tournament we are watching (5401 = TI 2017)
 const tiLeagueID = 5401
 
-var tmplGamesDrafting = template.Must(template.New("GamesDrafting").Parse(strings.TrimSpace(`
-{{ range . }}
-In Drafting: {{ .RadiantTeam.TeamName }} vs. {{ .DireTeam.TeamName }} (Game {{ .GameNumber }})
-{{- end -}}
-`)))
-
-var tmplGamesStartedTTS = template.Must(template.New("GamesStartedTTS").Parse(strings.TrimSpace(`
-{{ range . }}
-Match Started: {{ .RadiantTeam.TeamName }} vs. {{ .DireTeam.TeamName }} (Game {{ .GameNumber }})
-{{- end -}}
-`)))
-
-type gameFinishedTTSDataItem struct {
-	*MatchDetails
-	GameNumber int
-}
-
-var tmplGamesFinishedTTS = template.Must(template.New("GamesFinishedTTS").Parse(strings.TrimSpace(`
-{{ range . -}}
-{{- if .RadiantWin }}
-Match Ended: {{ .MatchDetails.RadiantName }} defeated {{ .MatchDetails.DireName }} ({{ .MatchDetails.RadiantScore}} - {{ .MatchDetails.DireScore }}, Game {{ .GameNumber }})
-{{- else }}
-Match Ended: {{ .MatchDetails.DireName }} defeated {{ .MatchDetails.RadiantName }} ({{ .MatchDetails.DireScore}} - {{ .MatchDetails.RadiantScore }}, Game {{ .GameNumber }})
-{{- end -}}
-{{- end -}}
-`)))
-
-type gamesStartedDetailedData []struct {
-	*LiveLeagueGame
-	RadiantHeroes []string
-	DireHeroes    []string
+type finishedQueueEntry struct {
+	MatchID int64
+	AddedAt time.Time
 }
 
 type bot struct {
 	logger         *logrus.Logger
 	discordSession *discordgo.Session
-	steamClient    *steamClient
+	dotaClient     *dota.Client
 	// Ids of discord channels where we post updates
 	channelsMu sync.RWMutex
 	channels   []string
 
-	// Map of game ids that we have seen in the drafting phase
-	gamesDrafting map[int64]bool
-	// Map of game ids that we have seen started
-	gamesStarted map[int64]bool
-	// Map of game ids that were started an are no longer live (i.e. finished)
-	gamesFinished map[int64]bool
-	// Map of game ids to their series game number. Needed as this information
-	// is only available in GetLiveLeagueGames and not GetMatchDetails
-	gameSeriesNumber map[int64]int
-	// Map of dota hero ids -> english hero name
-	heroNames map[int]string
+	// Map of match ids that we have seen in the drafting phase
+	matchesDrafting map[int64]bool
+	// Map of match ids that we have seen started
+	matchesStarted map[int64]bool
+	// Map of match ids that were started an are no longer live (i.e. finished)
+	matchesFinished map[int64]bool
+
+	// Map of match ids to the match's game number. We must store this as
+	// the game number is not provided in the GetMatchDetails result
+	gameNumbers map[int64]int
+
+	// Queue of finished matches that we have yet to fetch the finished
+	// match details for.
+	finishedQueue []finishedQueueEntry
 }
 
 func NewBot(logger *logrus.Logger, discordToken string, steamKey string) (*bot, error) {
@@ -81,19 +57,19 @@ func NewBot(logger *logrus.Logger, discordToken string, steamKey string) (*bot, 
 	if err != nil {
 		return nil, errors.Wrap(err, "Error creating discordgo session")
 	}
-	steamClient, err := newSteamClient(logger, steamKey)
+	dotaClient, err := dota.NewClient(logger, steamKey)
 	if err != nil {
-		return nil, errors.Wrap(err, "Error creating steamClient")
+		return nil, errors.Wrap(err, "Error creating dotaClient")
 	}
 	return &bot{
-		logger:           logger,
-		discordSession:   discordSession,
-		steamClient:      steamClient,
-		gamesDrafting:    make(map[int64]bool),
-		gamesStarted:     make(map[int64]bool),
-		gamesFinished:    make(map[int64]bool),
-		gameSeriesNumber: make(map[int64]int),
-		heroNames:        make(map[int]string),
+		logger:          logger,
+		discordSession:  discordSession,
+		dotaClient:      dotaClient,
+		matchesDrafting: make(map[int64]bool),
+		matchesStarted:  make(map[int64]bool),
+		matchesFinished: make(map[int64]bool),
+		gameNumbers:     make(map[int64]int),
+		finishedQueue:   make([]finishedQueueEntry, 0),
 	}, nil
 }
 
@@ -109,130 +85,124 @@ func (bot *bot) Run(ctx context.Context) error {
 			bot.logger.Error("Error closing Discord connection: %+v", closeErr)
 		}
 	}()
-	if err := bot.fetchHeroNames(ctx); err != nil {
-		return errors.Wrap(err, "Error fetching hero names")
-	}
 	return errors.Wrap(bot.run(ctx), "Error during run")
 }
 
-// fetchHeroNames fetches all dota hero names from the steam api and sets
-// them in the heroNames map
-func (bot *bot) fetchHeroNames(ctx context.Context) error {
-	heroesRes, err := bot.steamClient.GetHeroes(ctx, "en_us")
-	if err != nil {
-		return errors.Wrap(err, "Error fetching Dota hero data")
-	}
-	for _, hero := range heroesRes.Result.Heroes {
-		bot.heroNames[hero.ID] = hero.LocalizedName
-	}
-	return nil
-}
-
-func (bot *bot) heroNameByID(heroID int) (string, error) {
-	if name, ok := bot.heroNames[heroID]; ok {
-		return name, nil
-	}
-	return "", errors.Errorf("Could not find hero name for id: %d", heroID)
-}
-
 func (bot *bot) run(ctx context.Context) error {
-	// fetchWait is used to implement exponential back-off on error from
-	// the steam api.
-	var fetchWait = MatchUpdateInterval
 	for {
-		gamesRes, err := bot.steamClient.GetLiveLeagueGames(ctx, tiLeagueID)
-		if err != nil {
-			fetchWait *= 2
-			bot.logger.Debugf("Error getting live games: %+v", err)
-		} else {
-			fetchWait = MatchUpdateInterval
-			if err := bot.handleLiveGamesUpdated(ctx, gamesRes.Result.Games); err != nil {
-				return errors.Wrap(err, "Error handling updated live games")
-			}
-		}
-		if fetchWait > 15*time.Minute {
-			fetchWait = 15 * time.Minute
-		}
-		bot.logger.Debugf("Waiting %s until next update", fetchWait)
+		bot.fetchFinishedMatchDetails(ctx)
+		bot.fetchLiveGames(ctx)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(fetchWait):
+		case <-time.After(updateInterval):
 		}
 	}
 }
 
-func (bot *bot) handleLiveGamesUpdated(ctx context.Context, liveGames []LiveLeagueGame) error {
-	var (
-		newDrafting = make([]LiveLeagueGame, 0)
-		newStarted  = make([]LiveLeagueGame, 0)
-		newFinished = make([]gameFinishedTTSDataItem, 0)
-	)
-	// Find new games, or games that have gone from drafting -> started
-	for _, game := range liveGames {
-		bot.gameSeriesNumber[game.MatchID] = game.GameNumber
-		if !isGameStarted(game) {
-			if _, ok := bot.gamesDrafting[game.MatchID]; !ok {
-				newDrafting = append(newDrafting, game)
-				bot.gamesDrafting[game.MatchID] = true
+func (bot *bot) fetchFinishedMatchDetails(ctx context.Context) {
+	remainingQueue := make([]finishedQueueEntry, 0)
+	finishedDetails := make([]matchesFinishedDataItem, 0)
+	for _, entry := range bot.finishedQueue {
+		details, err := bot.dotaClient.GetMatchDetails(ctx, entry.MatchID)
+		if err != nil {
+			bot.logger.Debugf("Error getting match details for %d: %+v", entry.MatchID, err)
+			// Retry entries until they have been in the queue for > 10 min
+			if time.Since(entry.AddedAt) <= 10*time.Minute {
+				remainingQueue = append(remainingQueue, entry)
 			}
+			continue
+		}
+		if details.Result.RadiantWin {
+			finishedDetails = append(finishedDetails, matchesFinishedDataItem{
+				GameNumber:  bot.gameNumbers[entry.MatchID],
+				WinnerName:  details.Result.RadiantName,
+				LoserName:   details.Result.DireName,
+				WinnerScore: details.Result.RadiantScore,
+				LoserScore:  details.Result.DireScore,
+			})
 		} else {
-			if _, ok := bot.gamesStarted[game.MatchID]; !ok {
-				newStarted = append(newStarted, game)
-				bot.gamesStarted[game.MatchID] = true
+			finishedDetails = append(finishedDetails, matchesFinishedDataItem{
+				GameNumber:  bot.gameNumbers[entry.MatchID],
+				WinnerName:  details.Result.DireName,
+				LoserName:   details.Result.RadiantName,
+				WinnerScore: details.Result.DireScore,
+				LoserScore:  details.Result.RadiantScore,
+			})
+		}
+	}
+	bot.finishedQueue = remainingQueue
+	if len(finishedDetails) > 0 {
+		bot.sendTemplateMessage(tmplMatchesFinished, finishedDetails, true)
+	}
+}
+
+func (bot *bot) fetchLiveGames(ctx context.Context) {
+	gamesRes, err := bot.dotaClient.GetLiveLeagueGames(ctx, tiLeagueID)
+	if err != nil {
+		bot.logger.Debugf("Error getting live games: %+v", err)
+		return
+	}
+	bot.handleLiveGames(gamesRes.Result.Games)
+}
+
+func (bot *bot) handleLiveGames(liveGames []dota.LiveLeagueGame) {
+	var (
+		newDrafting = make([]dota.LiveLeagueGame, 0)
+		newStarted  = make([]dota.LiveLeagueGame, 0)
+	)
+	// Find finished matches (matches started that are no longer live) and
+	// add them to a queue of matches we should fetch match details for.
+	// Note that fetching details directly is unlikely to work, as the
+	// steam api takes some time to update
+	for matchID := range bot.matchesStarted {
+		if _, ok := bot.matchesFinished[matchID]; !ok {
+			finished := true
+			for _, game := range liveGames {
+				if matchID == game.MatchID {
+					finished = false
+					break
+				}
+			}
+			if finished {
+				bot.matchesFinished[matchID] = true
+				entry := finishedQueueEntry{MatchID: matchID, AddedAt: time.Now()}
+				bot.finishedQueue = append(bot.finishedQueue, entry)
 			}
 		}
 	}
-	// Find finished games (games started that are no longer live)
-	for gameID := range bot.gamesStarted {
-		if _, ok := bot.gamesFinished[gameID]; ok {
-			continue
-		}
-		finished := true
-		for _, game := range liveGames {
-			if gameID == game.MatchID {
-				finished = false
-				break
+	// Find new matches, or matches that have gone from drafting -> started
+	for _, game := range liveGames {
+		bot.gameNumbers[game.MatchID] = game.GameNumber
+		if !isGameStarted(game) {
+			if _, ok := bot.matchesDrafting[game.MatchID]; !ok {
+				newDrafting = append(newDrafting, game)
+				bot.matchesDrafting[game.MatchID] = true
 			}
-		}
-		if finished {
-			bot.gamesFinished[gameID] = true
-			// Attempt to lookup match details for the finished game
-			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			matchDetailsRes, err := bot.steamClient.GetMatchDetails(ctx, gameID)
-			if err != nil {
-				bot.logger.Debugf("Error getting match details for finished match %d: %+v", gameID, err)
-			} else {
-				finishedGameData := gameFinishedTTSDataItem{
-					MatchDetails: matchDetailsRes.Result.MatchDetails,
-					GameNumber:   bot.gameSeriesNumber[gameID],
-				}
-				newFinished = append(newFinished, finishedGameData)
+		} else {
+			if _, ok := bot.matchesStarted[game.MatchID]; !ok {
+				newStarted = append(newStarted, game)
+				bot.matchesStarted[game.MatchID] = true
 			}
-			cancel()
 		}
 	}
 	if len(newDrafting) > 0 {
-		bot.sendTemplateMessage(tmplGamesDrafting, newDrafting, false)
+		bot.sendTemplateMessage(tmplMatchesDrafting, newDrafting, false)
 	}
 	if len(newStarted) > 0 {
-		bot.sendTemplateMessage(tmplGamesStartedTTS, newStarted, true)
+		bot.sendTemplateMessage(tmplMatchesStarted, newStarted, true)
 	}
-	if len(newFinished) > 0 {
-		bot.sendTemplateMessage(tmplGamesFinishedTTS, newFinished, true)
-	}
-	return nil
 }
 
 // isGameStarted tests if a game is past the drafting phase.
-func isGameStarted(game LiveLeagueGame) bool {
-	direPicks := game.Scoreboard.Dire.Picks
-	radiantPicks := game.Scoreboard.Radiant.Picks
+func isGameStarted(game dota.LiveLeagueGame) bool {
 	if game.Scoreboard.Duration > 0 {
 		return true
 	}
 	// We check for 9 picks rather than 10 to err a bit
 	// on the safe side (we don't want to miss a game starting!)
+	direPicks := game.Scoreboard.Dire.Picks
+	radiantPicks := game.Scoreboard.Radiant.Picks
 	if len(direPicks)+len(radiantPicks) >= 9 {
 		return true
 	}
@@ -240,7 +210,7 @@ func isGameStarted(game LiveLeagueGame) bool {
 }
 
 // addChannel adds a discord channel id to the list of channels that
-// should be notified of new games
+// should be notified of new matches
 func (bot *bot) addChannel(channelID string) {
 	bot.channelsMu.Lock()
 	defer bot.channelsMu.Unlock()
@@ -248,7 +218,7 @@ func (bot *bot) addChannel(channelID string) {
 }
 
 // removeChannel removes a discord channel id from the list of channels
-// that should be notified of new games
+// that should be notified of new matches
 func (bot *bot) removeChannel(channelID string) {
 	bot.channelsMu.Lock()
 	defer bot.channelsMu.Unlock()
@@ -261,8 +231,8 @@ func (bot *bot) removeChannel(channelID string) {
 	}
 }
 
-// sendMessage sends a TTS (text to speech) message to all registered
-// channels
+// sendMessage sends a message to all registered channels. If tts is true, the
+// message is sent as a TTS message
 func (bot *bot) sendMessage(content string, tts bool) {
 	bot.channelsMu.RLock()
 	defer bot.channelsMu.RUnlock()
@@ -280,13 +250,11 @@ func (bot *bot) sendMessage(content string, tts bool) {
 }
 
 // sendTemplateMessage executes a template with the provided data, then calls
-// sendMessage with the template string. If tts is true, the message will be
-// sent as a TTS message
+// sendMessage with the template string. If tts is true, the message is sent
+// as a TTS message
 func (bot *bot) sendTemplateMessage(tmpl *template.Template, data interface{}, tts bool) {
 	var msg bytes.Buffer
-	err := tmpl.Funcs(template.FuncMap{
-		"heroNameByID": bot.heroNameByID,
-	}).Execute(&msg, data)
+	err := tmpl.Execute(&msg, data)
 	if err != nil {
 		bot.logger.Errorf("Failed executing tmpl '%s': %+v", tmpl.Name, err)
 		return
