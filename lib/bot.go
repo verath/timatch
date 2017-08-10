@@ -34,11 +34,11 @@ type bot struct {
 	channels   map[string]struct{}
 
 	// Map of match ids that we have seen in the drafting phase
-	matchesDrafting map[int64]bool
+	matchesDrafting map[int64]struct{}
 	// Map of match ids that we have seen started
-	matchesStarted map[int64]bool
+	matchesStarted map[int64]struct{}
 	// Map of match ids that were started an are no longer live (i.e. finished)
-	matchesFinished map[int64]bool
+	matchesFinished map[int64]struct{}
 
 	// Map of match ids to the match's game number. We must store this as
 	// the game number is not provided in the GetMatchDetails result
@@ -66,9 +66,9 @@ func NewBot(logger *logrus.Logger, discordToken string, steamKey string) (*bot, 
 		discordSession:  discordSession,
 		dotaClient:      dotaClient,
 		channels:        make(map[string]struct{}),
-		matchesDrafting: make(map[int64]bool),
-		matchesStarted:  make(map[int64]bool),
-		matchesFinished: make(map[int64]bool),
+		matchesDrafting: make(map[int64]struct{}),
+		matchesStarted:  make(map[int64]struct{}),
+		matchesFinished: make(map[int64]struct{}),
 		gameNumbers:     make(map[int64]int),
 		finishedQueue:   make([]finishedQueueEntry, 0),
 	}, nil
@@ -115,12 +115,12 @@ func (bot *bot) updateLiveGames(ctx context.Context) {
 		if !isGameStarted(game) {
 			if _, ok := bot.matchesDrafting[game.MatchID]; !ok {
 				newDrafting = append(newDrafting, game)
-				bot.matchesDrafting[game.MatchID] = true
+				bot.matchesDrafting[game.MatchID] = struct{}{}
 			}
 		} else {
 			if _, ok := bot.matchesStarted[game.MatchID]; !ok {
 				newStarted = append(newStarted, game)
-				bot.matchesStarted[game.MatchID] = true
+				bot.matchesStarted[game.MatchID] = struct{}{}
 			}
 		}
 	}
@@ -147,7 +147,7 @@ func (bot *bot) updateFinishedGames(ctx context.Context) {
 		_, isFinished := bot.matchesFinished[match.MatchID]
 		if isStarted && !isFinished {
 			bot.logger.Debugf("Match finished %d", match.MatchID)
-			bot.matchesFinished[match.MatchID] = true
+			bot.matchesFinished[match.MatchID] = struct{}{}
 			entry := finishedQueueEntry{MatchID: match.MatchID, AddedAt: time.Now()}
 			bot.finishedQueue = append(bot.finishedQueue, entry)
 		}
