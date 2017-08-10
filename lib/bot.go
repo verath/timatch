@@ -31,7 +31,7 @@ type bot struct {
 	dotaClient     *dota.Client
 	// Ids of discord channels where we post updates
 	channelsMu sync.RWMutex
-	channels   []string
+	channels   map[string]struct{}
 
 	// Map of match ids that we have seen in the drafting phase
 	matchesDrafting map[int64]bool
@@ -65,6 +65,7 @@ func NewBot(logger *logrus.Logger, discordToken string, steamKey string) (*bot, 
 		logger:          logger,
 		discordSession:  discordSession,
 		dotaClient:      dotaClient,
+		channels:        make(map[string]struct{}),
 		matchesDrafting: make(map[int64]bool),
 		matchesStarted:  make(map[int64]bool),
 		matchesFinished: make(map[int64]bool),
@@ -213,7 +214,7 @@ func isGameStarted(game dota.LiveLeagueGame) bool {
 func (bot *bot) addChannel(channelID string) {
 	bot.channelsMu.Lock()
 	defer bot.channelsMu.Unlock()
-	bot.channels = append(bot.channels, channelID)
+	bot.channels[channelID] = struct{}{}
 }
 
 // removeChannel removes a discord channel id from the list of channels
@@ -221,13 +222,7 @@ func (bot *bot) addChannel(channelID string) {
 func (bot *bot) removeChannel(channelID string) {
 	bot.channelsMu.Lock()
 	defer bot.channelsMu.Unlock()
-	for i, c := range bot.channels {
-		if c == channelID {
-			bot.channels[i] = bot.channels[len(bot.channels)-1]
-			bot.channels = bot.channels[:len(bot.channels)-1]
-			break
-		}
-	}
+	delete(bot.channels, channelID)
 }
 
 // sendMessage sends a message to all registered channels. If tts is true, the
@@ -235,7 +230,7 @@ func (bot *bot) removeChannel(channelID string) {
 func (bot *bot) sendMessage(content string, tts bool) {
 	bot.channelsMu.RLock()
 	defer bot.channelsMu.RUnlock()
-	for _, channelID := range bot.channels {
+	for channelID := range bot.channels {
 		var err error
 		if tts {
 			_, err = bot.discordSession.ChannelMessageSendTTS(channelID, content)
