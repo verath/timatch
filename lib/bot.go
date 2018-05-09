@@ -25,13 +25,18 @@ type finishedQueueEntry struct {
 	AddedAt time.Time
 }
 
+type guildID string
+type channelID string
+
 type bot struct {
 	logger         *logrus.Logger
 	discordSession *discordgo.Session
 	dotaClient     *dota.Client
-	// Ids of discord channels where we post updates
+
 	channelsMu sync.RWMutex
-	channels   map[string]struct{}
+	// Ids of discord channels where we post updates, each
+	// channel id mapping to the guild it is associated with
+	channels map[channelID]guildID
 
 	// Map of match ids that we have seen in the drafting phase
 	matchesDrafting map[int64]struct{}
@@ -65,7 +70,7 @@ func NewBot(logger *logrus.Logger, discordToken string, steamKey string) (*bot, 
 		logger:          logger,
 		discordSession:  discordSession,
 		dotaClient:      dotaClient,
-		channels:        make(map[string]struct{}),
+		channels:        make(map[channelID]guildID),
 		matchesDrafting: make(map[int64]struct{}),
 		matchesStarted:  make(map[int64]struct{}),
 		matchesFinished: make(map[int64]struct{}),
@@ -209,20 +214,25 @@ func isGameStarted(game dota.LiveLeagueGame) bool {
 	return false
 }
 
-// addChannel adds a discord channel id to the list of channels that
-// should be notified of new matches
-func (bot *bot) addChannel(channelID string) {
+// addGuildChannel adds a channel id to the channels to be notified of new matches. The
+// channel is associated with the provided guild id, so that all channels for a given
+// guild id can be removed when the guild is removed.
+func (bot *bot) addGuildChannel(guildID guildID, channelID channelID) {
 	bot.channelsMu.Lock()
 	defer bot.channelsMu.Unlock()
-	bot.channels[channelID] = struct{}{}
+	bot.channels[channelID] = guildID
 }
 
-// removeChannel removes a discord channel id from the list of channels
-// that should be notified of new matches
-func (bot *bot) removeChannel(channelID string) {
+// removeGuildChannels removes all discord channel id associated with the guildID from
+// the list of channels that should be notified of new matches
+func (bot *bot) removeGuildChannels(guildID guildID) {
 	bot.channelsMu.Lock()
 	defer bot.channelsMu.Unlock()
-	delete(bot.channels, channelID)
+	for channelID, gID := range bot.channels {
+		if gID == guildID {
+			delete(bot.channels, channelID)
+		}
+	}
 }
 
 // sendMessage sends a message to all registered channels. If tts is true, the
@@ -230,12 +240,12 @@ func (bot *bot) removeChannel(channelID string) {
 func (bot *bot) sendMessage(content string, tts bool) {
 	bot.channelsMu.RLock()
 	defer bot.channelsMu.RUnlock()
-	for channelID := range bot.channels {
+	for _, channelID := range bot.channels {
 		var err error
 		if tts {
-			_, err = bot.discordSession.ChannelMessageSendTTS(channelID, content)
+			_, err = bot.discordSession.ChannelMessageSendTTS(string(channelID), content)
 		} else {
-			_, err = bot.discordSession.ChannelMessageSend(channelID, content)
+			_, err = bot.discordSession.ChannelMessageSend(string(channelID), content)
 		}
 		if err != nil {
 			bot.logger.Errorf("Failed sending message to channel %s: %+v", channelID, err)
@@ -271,12 +281,28 @@ func (bot *bot) onReadyHandler(s *discordgo.Session, msg *discordgo.Ready) {
 // the initial logon sequence
 func (bot *bot) onGuildCreate(s *discordgo.Session, msg *discordgo.GuildCreate) {
 	bot.logger.Debugf("Got GuildCreate event: %s (%s)", msg.ID, msg.Name)
-	// The id of the #general channel is the same as the guild id
-	bot.addChannel(msg.ID)
+	// Select the channel with the first (lowest) position as the channel to send
+	// messages to
+	var firstCh *discordgo.Channel
+	for _, ch := range msg.Channels {
+		if ch.Type != discordgo.ChannelTypeGuildText {
+			// not a text channel
+			continue
+		}
+		if firstCh == nil || firstCh.Position > ch.Position {
+			firstCh = ch
+		}
+	}
+	if firstCh != nil {
+		bot.logger.Debugf("Using channel %s (%s)", firstCh.ID, firstCh.Name)
+		bot.addGuildChannel(guildID(msg.ID), channelID(firstCh.ID))
+	} else {
+		bot.logger.Warnf("No channel for guild %s (%s)", msg.ID, msg.Name)
+	}
 }
 
 // onGuildDelete is called whenever a guild is no longer accessible to us
 func (bot *bot) onGuildDelete(s *discordgo.Session, msg *discordgo.GuildDelete) {
 	bot.logger.Debugf("Got GuildDelete event: %s", msg.ID)
-	bot.removeChannel(msg.ID)
+	bot.removeGuildChannels(guildID(msg.ID))
 }
