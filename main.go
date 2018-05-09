@@ -14,10 +14,12 @@ func main() {
 	var (
 		discordToken string
 		steamKey     string
+		leagueID     uint
 		debug        bool
 	)
 	flag.StringVar(&discordToken, "discordtoken", "", "Discord bot token")
 	flag.StringVar(&steamKey, "steamkey", "", "Steam API Key")
+	flag.UintVar(&leagueID, "leagueid", 0, "Dota 2 league id of the league to watch")
 	flag.BoolVar(&debug, "debug", false, "True to log debug messages")
 	flag.Parse()
 
@@ -31,7 +33,10 @@ func main() {
 	if steamKey == "" {
 		logger.Fatal("steamkey is required")
 	}
-	bot, err := timatch.NewBot(logger, discordToken, steamKey)
+	if leagueID == 0 {
+		logger.Fatal("leagueid is required")
+	}
+	bot, err := timatch.NewBot(logger, discordToken, steamKey, int(leagueID))
 	if err != nil {
 		logger.Fatal("Error creating bot")
 	}

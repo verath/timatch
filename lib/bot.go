@@ -17,9 +17,6 @@ import (
 // of live matches
 const updateInterval = 60 * time.Second
 
-// The league ID of the tournament we are watching (5401 = TI 2017)
-const tiLeagueID = 5401
-
 type finishedQueueEntry struct {
 	MatchID int64
 	AddedAt time.Time
@@ -32,6 +29,10 @@ type bot struct {
 	logger         *logrus.Logger
 	discordSession *discordgo.Session
 	dotaClient     *dota.Client
+
+	// leagueID is the dota 2 league ID of the tournament we
+	// are watching
+	leagueID int
 
 	channelsMu sync.RWMutex
 	// Ids of discord channels where we post updates, each
@@ -54,7 +55,7 @@ type bot struct {
 	finishedQueue []finishedQueueEntry
 }
 
-func NewBot(logger *logrus.Logger, discordToken string, steamKey string) (*bot, error) {
+func NewBot(logger *logrus.Logger, discordToken string, steamKey string, leagueID int) (*bot, error) {
 	if !strings.HasPrefix(discordToken, "Bot ") {
 		discordToken = "Bot " + discordToken
 	}
@@ -70,6 +71,7 @@ func NewBot(logger *logrus.Logger, discordToken string, steamKey string) (*bot, 
 		logger:          logger,
 		discordSession:  discordSession,
 		dotaClient:      dotaClient,
+		leagueID:        leagueID,
 		channels:        make(map[channelID]guildID),
 		matchesDrafting: make(map[int64]struct{}),
 		matchesStarted:  make(map[int64]struct{}),
@@ -108,7 +110,7 @@ func (bot *bot) run(ctx context.Context) error {
 }
 
 func (bot *bot) updateLiveGames(ctx context.Context) {
-	liveGamesRes, err := bot.dotaClient.GetLiveLeagueGames(ctx, tiLeagueID)
+	liveGamesRes, err := bot.dotaClient.GetLiveLeagueGames(ctx, bot.leagueID)
 	if err != nil {
 		bot.logger.Errorf("Error getting live games: %+v", err)
 		return
@@ -142,7 +144,7 @@ func (bot *bot) updateFinishedGames(ctx context.Context) {
 		bot.logger.Debug("Not fetching match history, all known games already finished")
 		return
 	}
-	historyRes, err := bot.dotaClient.GetMatchHistory(ctx, tiLeagueID)
+	historyRes, err := bot.dotaClient.GetMatchHistory(ctx, bot.leagueID)
 	if err != nil {
 		bot.logger.Errorf("Error getting match history: %+v", err)
 		return
