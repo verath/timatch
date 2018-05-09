@@ -270,7 +270,7 @@ func (bot *bot) sendTemplateMessage(tmpl *template.Template, data interface{}, t
 // i.e. after we have connected to Discord.
 func (bot *bot) onReadyHandler(s *discordgo.Session, msg *discordgo.Ready) {
 	bot.logger.Debug("Got Ready event")
-	err := s.UpdateStatus(-1, "Watching TI!")
+	err := s.UpdateStatus(-1, "Watching TI 2018!")
 	if err != nil {
 		bot.logger.Errorf("Could not update status: %+v", err)
 	}
