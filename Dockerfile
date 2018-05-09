@@ -1,7 +1,6 @@
-FROM golang:1.8-alpine
+FROM golang:1.10-alpine
 
 COPY . /go/src/github.com/verath/timatch
-
 
 RUN go install github.com/verath/timatch
 
