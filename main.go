@@ -49,6 +49,7 @@ func main() {
 		<-stopCh
 		cancel()
 	}()
+	logger.Info("Starting...")
 	err = bot.Run(ctx)
 	if errors.Cause(err) == context.Canceled {
 		logger.Debugf("Error caught in main: %+v", err)

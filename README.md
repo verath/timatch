@@ -12,8 +12,8 @@ Run the bot via Docker, supplying it a
 watch (see e.g. http://dota2.prizetrac.kr/leagues):
 
 ```
-docker build . -t vearth/timatch
-docker run -d vearth/timatch -discordtoken "DISCORD_BOT_TOKEN" -steamkey "STEAM_API_KEY" -leagueid 5401
+docker build . -t verath/timatch
+docker run -d verath/timatch -discordtoken "DISCORD_BOT_TOKEN" -steamkey "STEAM_API_KEY" -leagueid 5401
 ```
 
 Add the bot to a guild by visiting the following url, replacing CLIENT_ID with the

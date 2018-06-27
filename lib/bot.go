@@ -3,14 +3,15 @@ package timatch
 import (
 	"bytes"
 	"context"
-	"github.com/Sirupsen/logrus"
-	"github.com/bwmarrin/discordgo"
-	"github.com/pkg/errors"
-	"github.com/verath/timatch/lib/dota"
 	"strings"
 	"sync"
 	"text/template"
 	"time"
+
+	"github.com/Sirupsen/logrus"
+	"github.com/bwmarrin/discordgo"
+	"github.com/pkg/errors"
+	"github.com/verath/timatch/lib/dota"
 )
 
 // updateInterval is the number of seconds between fetches
@@ -272,7 +273,7 @@ func (bot *bot) sendTemplateMessage(tmpl *template.Template, data interface{}, t
 // i.e. after we have connected to Discord.
 func (bot *bot) onReadyHandler(s *discordgo.Session, msg *discordgo.Ready) {
 	bot.logger.Debug("Got Ready event")
-	err := s.UpdateStatus(-1, "Watching TI 2018!")
+	err := s.UpdateStatus(-1, "Watching Dota!")
 	if err != nil {
 		bot.logger.Errorf("Could not update status: %+v", err)
 	}
