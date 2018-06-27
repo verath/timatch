@@ -1,5 +1,7 @@
 # TI-Match
 
+[![CircleCI](https://circleci.com/gh/verath/timatch.svg?style=svg)](https://circleci.com/gh/verath/timatch)
+
 A Discord bot that sends a message to guilds it is connected to
 when a match in a dota2 league is about to begin.
 
