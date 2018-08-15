@@ -243,7 +243,7 @@ func (bot *bot) removeGuildChannels(guildID guildID) {
 func (bot *bot) sendMessage(content string, tts bool) {
 	bot.channelsMu.RLock()
 	defer bot.channelsMu.RUnlock()
-	for _, channelID := range bot.channels {
+	for channelID := range bot.channels {
 		var err error
 		if tts {
 			_, err = bot.discordSession.ChannelMessageSendTTS(string(channelID), content)
