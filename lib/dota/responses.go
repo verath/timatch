@@ -12,11 +12,13 @@ type LiveLeagueGamesResponse struct {
 }
 
 type LiveLeagueGame struct {
-	RadiantTeam LiveLeagueGamesTeam      `json:"radiant_team"`
-	DireTeam    LiveLeagueGamesTeam      `json:"dire_team"`
-	GameNumber  int                      `json:"game_number"`
-	MatchID     int64                    `json:"match_id"`
-	Scoreboard  LiveLeagueGameScoreboard `json:"scoreboard"`
+	DireSeriesWins    int                      `json:"dire_series_wins"`
+	RadiantSeriesWins int                      `json:"radiant_series_wins"`
+	GameNumber        int                      `json:"game_number"`
+	RadiantTeam       LiveLeagueGamesTeam      `json:"radiant_team"`
+	DireTeam          LiveLeagueGamesTeam      `json:"dire_team"`
+	MatchID           int64                    `json:"match_id"`
+	Scoreboard        LiveLeagueGameScoreboard `json:"scoreboard"`
 }
 
 type LiveLeagueGamesTeam struct {

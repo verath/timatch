@@ -119,7 +119,11 @@ func (bot *bot) updateLiveGames(ctx context.Context) {
 	newDrafting := make([]dota.LiveLeagueGame, 0)
 	newStarted := make([]dota.LiveLeagueGame, 0)
 	for _, game := range liveGamesRes.Result.Games {
+		if game.GameNumber == 0 {
+			game.GameNumber = game.RadiantSeriesWins + game.DireSeriesWins + 1
+		}
 		bot.gameNumbers[game.MatchID] = game.GameNumber
+
 		if !isGameStarted(game) {
 			if _, ok := bot.matchesDrafting[game.MatchID]; !ok {
 				newDrafting = append(newDrafting, game)
