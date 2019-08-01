@@ -8,7 +8,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"github.com/bwmarrin/discordgo"
 	"github.com/pkg/errors"
 	"github.com/verath/timatch/lib/dota"

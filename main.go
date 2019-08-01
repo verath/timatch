@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"flag"
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"github.com/pkg/errors"
 	"github.com/verath/timatch/lib"
 	"os"
