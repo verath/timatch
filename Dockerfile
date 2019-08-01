@@ -15,6 +15,7 @@ RUN CGO_ENABLED=1 go test -v -race -timeout 30s $(go list)
 
 FROM alpine:latest
 WORKDIR /root/
+RUN apk update && apk add ca-certificates && rm -rf /var/cache/apk/*
 COPY --from=builder /app/timatch .
 STOPSIGNAL SIGINT
 ENTRYPOINT ["./timatch"]
