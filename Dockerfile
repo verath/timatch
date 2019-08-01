@@ -1,13 +1,17 @@
 FROM golang:1.12 as builder
-ENV GO111MODULE=on
 WORKDIR /app
 # Resolve dependencies
 COPY go.mod .
 COPY go.sum .
 RUN go mod download
-# Build app
+# Build + test app
 COPY . .
-RUN GO111MODULE=on CGO_ENABLED=0 GOOS=linux go build -a
+ENV GO111MODULE=on
+ENV GOOS=linux
+ENV CGO_ENABLED=0
+RUN go build -a -v
+RUN go vet $(go list)
+RUN CGO_ENABLED=1 go test -v -race -timeout 30s $(go list)
 
 FROM alpine:latest
 WORKDIR /root/
